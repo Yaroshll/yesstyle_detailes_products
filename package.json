@@ -1,0 +1,24 @@
+{
+  "name": "yesstyle",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yaroshll/yesstyle_detailes_products.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Yaroshll/yesstyle_detailes_products/issues"
+  },
+  "homepage": "https://github.com/Yaroshll/yesstyle_detailes_products#readme",
+  "description": "",
+  "dependencies": {
+    "playwright": "^1.53.1",
+    "xlsx": "^0.18.5"
+  }
+}
