@@ -1,13 +1,30 @@
-export async function extractProduct(page, url) {
+function isSizeValue(value) {
+  if (!value) return false;
+  return /\b\d+(\.\d+)?\s?(g|kg|ml|l|oz|pcs|pc|pack)\b/i.test(value);
+}
+
+async function extractGalleryImages(page) {
+  await page.waitForSelector(
+    'section.productMedia-module-scss-module__MBnCyq__img-content img',
+    { timeout: 10000 }
+  );
+
+  return await page.$$eval(
+    'section.productMedia-module-scss-module__MBnCyq__img-content img',
+    imgs => [...new Set(imgs.map(img => img.src).filter(Boolean))]
+  );
+}
+
+export async function extractProduct(page, url, index, total) {
+  console.log(`🛒 Product ${index + 1} / ${total}`);
+
   await page.goto(url, {
     waitUntil: "domcontentloaded",
     timeout: 60000
   });
 
-  // ---------------- TITLE + BRAND ----------------
-  await page.waitForSelector('div[class*="productUpper-heading"] h1', {
-    timeout: 300000
-  });
+  // ================= TITLE + BRAND =================
+  await page.waitForSelector('div[class*="productUpper-heading"] h1');
 
   const fullText = await page.textContent(
     'div[class*="productUpper-heading"] h1'
@@ -22,181 +39,327 @@ export async function extractProduct(page, url) {
 
   const finalTitle = `${brand}, ${title}`;
 
-  // Handle WITHOUT extra dashes
-const handle = `${brand} ${title}`
-  .toLowerCase()
-  .replace(/,/g, "")          // remove commas
-  .replace(/&/g, "and")       // normalize &
-  .replace(/[^a-z0-9\s]/g, "") // keep letters, numbers, spaces only
-  .trim()
-  .replace(/\s+/g, "-");      // spaces → single dash
+  const handle = `${brand} ${title}`
+    .toLowerCase()
+    .replace(/,/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
 
-  // ---------------- PRICE ----------------
+  // ================= PRICE =================
   let price = "";
   let compareAtPrice = "";
 
   try {
-    price = await page.textContent(
+    price = (await page.textContent(
       'span.productDetailPage-module-scss-module__dKBM_W__sellingPrice'
-    );
-    price = price.replace(/[^\d.]/g, "");
+    ))
+      .replace(/[^\d.]/g, "")
+      .replace(/\.$/, "");
   } catch {}
 
   try {
-    compareAtPrice = await page.textContent(
+    compareAtPrice = (await page.textContent(
       'span.productDetailPage-module-scss-module__dKBM_W__listPrice'
-    );
-    compareAtPrice = compareAtPrice.replace(/[^\d.]/g, "");
+    ))
+      .replace(/[^\d.]/g, "")
+      .replace(/\.$/, "");
   } catch {}
 
-  // ---------------- DESCRIPTION (YESSTYLE SAFE) ----------------
-let descriptionHtml = "";
-
-try {
-  // Scroll to product info area
-  const infoBox = page.locator(
-    'div[class*="productInfoBox"]'
-  );
-
-  await infoBox.first().scrollIntoViewIfNeeded();
-  await page.waitForTimeout(1000);
-
-  // Try to extract accordion content if exists
-  const accordionContent = page.locator(
-    'div[class*="accordionContent"]'
-  );
-
-  if (await accordionContent.count() > 0) {
-    descriptionHtml = await accordionContent.first().evaluate(
-      el => el.innerHTML
-    );
-  }
-
-  // Fallback – full info box HTML
-  if (!descriptionHtml) {
-    descriptionHtml = await infoBox.first().evaluate(
-      el => el.innerHTML
-    );
-  }
-
-} catch {
-  console.log("⚠️ Features description not found");
-  descriptionHtml = "";
-}
-
-
-  // ---------------- MAIN IMAGE (FIXED) ----------------
-  let mainImage = "";
+  // ================= DESCRIPTION =================
+  let descriptionHtml = "";
 
   try {
-    mainImage = await page.getAttribute(
-      'div.productDetailPage_productImageCover__chqZe img',
-      "src"
+    const infoBox = page.locator('div[class*="productInfoBox"]');
+    await infoBox.first().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+
+    const accordion = page.locator('div[class*="accordionContent"]');
+    descriptionHtml =
+      (await accordion.count()) > 0
+        ? await accordion.first().evaluate(el => el.innerHTML)
+        : await infoBox.first().evaluate(el => el.innerHTML);
+  } catch {}
+
+  // ================= MAIN IMAGE =================
+  await page.waitForSelector(
+    'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img'
+  );
+
+  const mainImage = await page.$eval(
+    'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img',
+    img => img.src
+  );
+
+  const rows = [];
+
+  // ============================================================
+  // 🟢 CASE 1: STANDALONE SIZE (aria-hidden=true, no dialog)
+  // ============================================================
+  const standaloneSize = await page
+    .locator(
+      'div[role="button"][aria-hidden="true"] span.buyOptions-module-scss-module__Zum4na__option-title'
+    )
+    .first()
+    .textContent()
+    .catch(() => null);
+
+  if (standaloneSize && isSizeValue(standaloneSize)) {
+    rows.push({
+      Handle: handle,
+      Title: finalTitle,
+      "Body (HTML)": descriptionHtml,
+      Vendor: brand,
+
+      "Option1 Name": "Size",
+      "Option1 Value": standaloneSize.trim(),
+
+      "Cost per item": price,
+      "Variant Compare At Price": compareAtPrice,
+
+      "Variant Fulfillment Service": "manual",
+      "Variant Inventory Policy": "deny",
+      "Variant Inventory Tracker": "shopify",
+
+      "Image Src": mainImage,
+      "Variant Image": mainImage,
+
+      "product.metafields.custom.original_product_url": url
+    });
+
+    // 👇 حتى في حالة standalone size نحتاج gallery
+    const viewGalleryBtn = page.locator('button:has-text("View Gallery")');
+    if (await viewGalleryBtn.count()) {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      await page.waitForTimeout(300);
+      await viewGalleryBtn.first().scrollIntoViewIfNeeded();
+      await page.waitForTimeout(400);
+      await viewGalleryBtn.first().click();
+      await page.waitForTimeout(800);
+
+      const galleryImages = await extractGalleryImages(page);
+
+      // أضف باقي صور الـ gallery
+      for (let i = 1; i < galleryImages.length; i++) {
+        rows.push({
+          Handle: handle,
+          "Image Src": galleryImages[i]
+        });
+      }
+    }
+
+    return rows;
+  }
+
+  // ============================================================
+  // 🔵 NORMAL VARIANTS FLOW
+  // ============================================================
+  const OPEN_VARIANT_BTN =
+    'div[role="button"]:has(span.buyOptions-module-scss-module__Zum4na__option-title):not([aria-hidden="true"])';
+
+  const VARIANT_DIALOG = '#product-options-dialog-content';
+  const VARIANT_BUTTONS =
+    '#product-options-dialog-content button[aria-label]';
+
+  let rawVariants = [];
+
+  try {
+    await page.click(OPEN_VARIANT_BTN);
+    await page.waitForSelector(VARIANT_DIALOG);
+
+    rawVariants = await page.$$eval(VARIANT_BUTTONS, btns =>
+      btns.map(b => ({
+        name: b.getAttribute("aria-label")?.trim(),
+        disabled:
+          b.hasAttribute("disabled") ||
+          b.getAttribute("aria-disabled") === "true"
+      }))
     );
   } catch {
-    mainImage = "";
-  }
-  // -------- VARIANT SELECTORS (MUST BE DEFINED) --------
-const OPEN_VARIANT_BTN =
-  'div[role="button"]:has-text("Select size or color")';
-
-const VARIANT_DIALOG =
-  '#product-options-dialog-content';
-
-const VARIANT_BUTTONS =
-  '#product-options-dialog-content button[aria-label]';
-
-const MAIN_IMAGE =
-  'img[src*="yesstyle"]';
-// ----------------------------------------------------
-
-
-// ================= VARIANTS WITH DIALOG CLOSE FIX =================
-
-// 1️⃣ Open variant dialog
-await page.waitForSelector(OPEN_VARIANT_BTN, { timeout: 15000 });
-await page.click(OPEN_VARIANT_BTN);
-
-// 2️⃣ Wait for dialog
-await page.waitForSelector(VARIANT_DIALOG, { timeout: 15000 });
-
-// 3️⃣ Collect variant names FIRST (important)
-const variants = await page.$$eval(
-  VARIANT_BUTTONS,
-  btns => btns.map(b => b.getAttribute("aria-label"))
-);
-
-if (variants.length === 0) {
-  console.log("⚠️ No variants found");
-  return [];
-}
-
-const rows = [];
-
-// 4️⃣ Loop variants by index
-for (let i = 0; i < variants.length; i++) {
-
-  // 🔁 Re-open dialog if not first variant
-  if (i !== 0) {
-    await page.click(OPEN_VARIANT_BTN);
-    await page.waitForSelector(VARIANT_DIALOG, { timeout: 15000 });
+    rawVariants = [];
   }
 
-  // 5️⃣ Click variant by index
-  const variantBtn = page.locator(VARIANT_BUTTONS).nth(i);
-  const variantName = variants[i];
+  // ================= SPLIT COLOR / SIZE =================
+  let sizeValue = null;
+  let colorVariants = [];
 
-  await variantBtn.click();
-  await page.waitForTimeout(300);
+  for (const v of rawVariants) {
+    if (isSizeValue(v.name)) {
+      sizeValue = v.name;
+    } else {
+      colorVariants.push(v);
+    }
+  }
 
-  // 6️⃣ Close dialog (ESC)
-await page.keyboard.press("Escape");
-await page.waitForTimeout(500);
+  const hasSize = !!sizeValue;
 
-// 7️⃣ Wait for the correct variant image to load
-// - Ensure the main image container exists
-// - Ensure the image alt contains the current variant name
-// - Ensure the src has changed from the previous value (to handle dynamic updates)
-const variantImage = await page.waitForFunction(
-  (variantName, previousSrc) => {
-    const container = document.querySelector('div.productDetailPage-module-scss-module__dKBM_W__productImageCover');
-    if (!container) return false;
-    const img = container.querySelector('img');
-    if (!img) return false;
-    // Check that alt includes the current variant name
-    if (!img.alt.includes(variantName)) return false;
-    // Check that the src changed from previous (ensures the new variant image loaded)
-    return img.src !== previousSrc && img.naturalWidth > 300;
-  },
-  {},
-  variantName,
-  mainImage // previous main image src before variant selection
-);
+  // ============================================================
+  // 🟡 CASE 2: SIZE ONLY (dialog exists but one size)
+  // ============================================================
+  if (!colorVariants.length && hasSize) {
+    rows.push({
+      Handle: handle,
+      Title: finalTitle,
+      "Body (HTML)": descriptionHtml,
+      Vendor: brand,
 
-// 8️⃣ Get the updated src of the main variant image
-const finalVariantImage = await page.$eval(
-  'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img',
-  img => img.src
-);
+      "Option1 Name": "Size",
+      "Option1 Value": sizeValue,
+
+      "Cost per item": price,
+      "Variant Compare At Price": compareAtPrice,
+
+      "Variant Fulfillment Service": "manual",
+      "Variant Inventory Policy": "deny",
+      "Variant Inventory Tracker": "shopify",
+
+      "Image Src": mainImage,
+      "Variant Image": mainImage,
+
+      "product.metafields.custom.original_product_url": url
+    });
+
+    return rows;
+  }
+
+  // ============================================================
+  // 🟣 COLOR (WITH OR WITHOUT SIZE)
+  // ============================================================
+  let isFirstRow = true;
+  let firstVariantImage = null;
+  let shouldUseGallery = false;
+
+  for (let i = 0; i < colorVariants.length; i++) {
+    const { name, disabled } = colorVariants[i];
+    if (disabled) continue;
+
+    if (i !== 0) {
+      await page.click(OPEN_VARIANT_BTN);
+      await page.waitForSelector(VARIANT_DIALOG);
+    }
+
+    const btn = page
+      .locator(VARIANT_BUTTONS)
+      .filter({ hasText: name })
+      .first();
+
+    await btn.click();
+    await page.waitForTimeout(500);
+
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+
+    const variantImage = await page.$eval(
+      'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img',
+      img => img.src
+    );
+
+    if (!firstVariantImage) {
+      firstVariantImage = variantImage;
+    } else if (variantImage === firstVariantImage) {
+      shouldUseGallery = true;
+    }
+
+    if (isFirstRow) {
+      rows.push({
+        Handle: handle,
+        Title: finalTitle,
+        "Body (HTML)": descriptionHtml,
+        Vendor: brand,
+
+        "Option1 Name": "Color",
+        "Option1 Value": name,
+
+        "Option2 Name": hasSize ? "Size" : "",
+        "Option2 Value": hasSize ? sizeValue : "",
+
+        "Cost per item": price,
+        "Variant Compare At Price": compareAtPrice,
+
+        "Variant Fulfillment Service": "manual",
+        "Variant Inventory Policy": "deny",
+        "Variant Inventory Tracker": "shopify",
+
+        "Image Src": mainImage, // ✅
+"Variant Image": variantImage,
 
 
+        "product.metafields.custom.original_product_url": url
+      });
 
-  rows.push({
-    Handle: handle,
-    Title: finalTitle,
-    Body_HTML: descriptionHtml,
-    Vendor: brand,
-    Price: price,
-    Compare_At_Price: compareAtPrice,
-    Option1_Name: "Color",
-    Option1_Value: variantName,
-    Image_Src: variantImage
-  });
-}
+      isFirstRow = false;
+    } else {
+      rows.push({
+        Handle: handle,
+        "Option1 Value": name,
+        "Option2 Value": hasSize ? sizeValue : "",
 
-// ================================================================
+        "Variant Fulfillment Service": "manual",
+        "Variant Inventory Policy": "deny",
+        "Variant Inventory Tracker": "shopify",
 
-return rows;
+        "Variant Image": variantImage
+      });
+    }
+  }
 
+  // ============================================================
+  // 🔴 VIEW GALLERY FALLBACK (IMAGES NOT CHANGING)
+  // ============================================================
+  if (shouldUseGallery) {
+    const viewGalleryBtn = page.locator('button:has-text("View Gallery")');
 
+    if (await viewGalleryBtn.count()) {
+      // scroll عام
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+      await page.waitForTimeout(300);
+
+      // scroll مباشر للزر
+      await viewGalleryBtn.first().scrollIntoViewIfNeeded();
+      await page.waitForTimeout(400);
+
+      // click
+      await viewGalleryBtn.first().click();
+      await page.waitForTimeout(800);
+
+      const galleryImages = await extractGalleryImages(page);
+
+      // إعادة بناء rows بالـ gallery
+      rows.length = 0;
+
+      rows.push({
+        Handle: handle,
+        Title: finalTitle,
+        "Body (HTML)": descriptionHtml,
+        Vendor: brand,
+
+        "Option1 Name": "Color",
+        "Option1 Value": colorVariants[0].name,
+
+        "Option2 Name": hasSize ? "Size" : "",
+        "Option2 Value": hasSize ? sizeValue : "",
+
+        "Cost per item": price,
+        "Variant Compare At Price": compareAtPrice,
+
+        "Variant Fulfillment Service": "manual",
+        "Variant Inventory Policy": "deny",
+        "Variant Inventory Tracker": "shopify",
+
+        "Image Src": galleryImages[0] || mainImage,
+
+        "product.metafields.custom.original_product_url": url
+      });
+
+      for (let i = 1; i < galleryImages.length; i++) {
+        rows.push({
+          Handle: handle,
+          "Image Src": galleryImages[i]
+        });
+      }
+    }
+  }
+
+  return rows;
 }

@@ -23,7 +23,7 @@ export function saveToExcelAndCsv(rows) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet, "Products");
 
-  if (!fs.existsSync("outputs")) fs.mkdirSync("outputs");
+  if (!fs.existsSync("output")) fs.mkdirSync("output");
 
   const timestamp = getTimestamp();
 
