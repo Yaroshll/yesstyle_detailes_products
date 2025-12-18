@@ -27,8 +27,8 @@ export function saveToExcelAndCsv(rows) {
 
   const timestamp = getTimestamp();
 
-  XLSX.writeFile(wb, `outputs/yesstyle_${timestamp}.xlsx`);
-  XLSX.writeFile(wb, `outputs/yesstyle_${timestamp}.csv`);
+  XLSX.writeFile(wb, `output/yesstyle_${timestamp}.xlsx`);
+  XLSX.writeFile(wb, `output/yesstyle_${timestamp}.csv`);
 
   console.log("✅ Saved:", `yesstyle_${timestamp}`);
 }

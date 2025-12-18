@@ -282,7 +282,7 @@ export async function extractProduct(page, url, index, total) {
         "Variant Inventory Tracker": "shopify",
 
         "Image Src": mainImage, // ✅
-"Variant Image": variantImage,
+         "Variant Image": VariantImage,
 
 
         "product.metafields.custom.original_product_url": url
