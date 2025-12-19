@@ -281,9 +281,8 @@ export async function extractProduct(page, url, index, total) {
         "Variant Inventory Policy": "deny",
         "Variant Inventory Tracker": "shopify",
 
-        "Image Src": mainImage, // ✅
-         "Variant Image": VariantImage,
-
+        "Image Src": mainImage,
+        "Variant Image": variantImage,
 
         "product.metafields.custom.original_product_url": url
       });
