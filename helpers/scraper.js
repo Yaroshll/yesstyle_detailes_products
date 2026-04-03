@@ -15,7 +15,7 @@ const SELECTORS = {
   variantDialog: "#product-options-dialog-content",
   variantDialogCloseButton:
     '[role="dialog"][aria-describedby="product-options-dialog-content"] button[class*="closeButton"]',
-  variantButtons: '#product-options-dialog-content button[aria-label]'
+  variantButtons: "#product-options-dialog-content button[aria-label]",
 };
 
 function isSizeValue(value) {
@@ -28,7 +28,49 @@ function normalizeText(value) {
 }
 
 function normalizePrice(value) {
-  return normalizeText(value).replace(/[^\d.]/g, "").replace(/\.$/, "");
+  return normalizeText(value)
+    .replace(/[^\d.]/g, "")
+    .replace(/\.$/, "");
+}
+
+function formatPrice(value) {
+  return (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2);
+}
+
+function getRandomCompareAtMultiplier() {
+  return 1.15 + Math.random() * 0.1;
+}
+
+function buildSharedCompareAtPrice(priceValues, multiplier) {
+  const numericPrices = priceValues
+    .map((priceValue) => Number(priceValue))
+    .filter((priceValue) => Number.isFinite(priceValue) && priceValue > 0);
+
+  if (!numericPrices.length) {
+    return "";
+  }
+
+  return formatPrice(Math.max(...numericPrices) * multiplier);
+}
+
+function buildPricingFields(costValue, compareAtPrice = "") {
+  const cost = normalizePrice(costValue);
+
+  if (!cost) {
+    return {
+      cost: "",
+      price: "",
+      compareAtPrice: "",
+    };
+  }
+
+  const price = formatPrice(Number(cost) * 1.25);
+
+  return {
+    cost,
+    price,
+    compareAtPrice: compareAtPrice || "",
+  };
 }
 
 function buildHandle(value) {
@@ -46,6 +88,7 @@ function buildPrimaryRow({
   finalTitle,
   descriptionHtml,
   brand,
+  cost = "",
   price,
   compareAtPrice,
   mainImage,
@@ -54,7 +97,7 @@ function buildPrimaryRow({
   option1Name = "",
   option1Value = "",
   option2Name = "",
-  option2Value = ""
+  option2Value = "",
 }) {
   return {
     Handle: handle,
@@ -65,31 +108,38 @@ function buildPrimaryRow({
     "Option1 Value": option1Value,
     "Option2 Name": option2Name,
     "Option2 Value": option2Value,
-    "Cost per item": price,
+    "Cost per item": cost,
+    price,
     "Variant Compare At Price": compareAtPrice,
     "Variant Fulfillment Service": "manual",
     "Variant Inventory Policy": "deny",
     "Variant Inventory Tracker": "shopify",
     "Image Src": mainImage,
     "Variant Image": variantImage,
-    "product.metafields.custom.original_product_url": url
+    "product.metafields.custom.original_product_url": url,
   };
 }
 
 function buildVariantRow({
   handle,
+  cost = "",
+  price = "",
+  compareAtPrice = "",
   option1Value = "",
   option2Value = "",
-  variantImage = ""
+  variantImage = "",
 }) {
   return {
     Handle: handle,
+    "Cost per item": cost,
+    price,
+    "Variant Compare At Price": compareAtPrice,
     "Option1 Value": option1Value,
     "Option2 Value": option2Value,
     "Variant Fulfillment Service": "manual",
     "Variant Inventory Policy": "deny",
     "Variant Inventory Tracker": "shopify",
-    "Variant Image": variantImage
+    "Variant Image": variantImage,
   };
 }
 
@@ -102,12 +152,17 @@ async function getTextContent(locator) {
   }
 
   return normalizeText(
-    await firstMatch.textContent({ timeout: 500 }).catch(() => "")
+    await firstMatch.textContent({ timeout: 500 }).catch(() => ""),
   );
 }
 
 async function getInnerHtml(locator) {
-  return (await locator.first().evaluate(el => el.innerHTML).catch(() => "")) || "";
+  return (
+    (await locator
+      .first()
+      .evaluate((el) => el.innerHTML)
+      .catch(() => "")) || ""
+  );
 }
 
 async function getMainImageSrc(page) {
@@ -132,9 +187,11 @@ async function extractGalleryImages(page) {
   const galleryImages = page.locator(SELECTORS.galleryImages);
   await galleryImages.first().waitFor({ state: "attached", timeout: 10000 });
 
-  return page.$$eval(SELECTORS.galleryImages, imgs =>
-    [...new Set(imgs.map(img => img.getAttribute("src") || img.src).filter(Boolean))]
-  );
+  return page.$$eval(SELECTORS.galleryImages, (imgs) => [
+    ...new Set(
+      imgs.map((img) => img.getAttribute("src") || img.src).filter(Boolean),
+    ),
+  ]);
 }
 
 async function openVariantDialog(page) {
@@ -158,7 +215,7 @@ async function openVariantDialog(page) {
     await trigger
       .click({
         timeout: 2000,
-        force: attempt > 0
+        force: attempt > 0,
       })
       .catch(() => {});
 
@@ -202,9 +259,9 @@ async function waitForSelectedVariant(page, name) {
       },
       {
         selector: SELECTORS.openVariantButton,
-        expectedText: name
+        expectedText: name,
       },
-      { timeout: 5000 }
+      { timeout: 5000 },
     )
     .catch(() => {});
 }
@@ -220,14 +277,17 @@ async function getVariantImage(page, previousImage = "") {
         },
         {
           selector: SELECTORS.mainImage,
-          previousSrc: previousImage
+          previousSrc: previousImage,
         },
-        { timeout: 2000 }
+        { timeout: 2000 },
       )
       .catch(() => {});
   }
 
-  return (await page.locator(SELECTORS.mainImage).first().getAttribute("src")) || previousImage;
+  return (
+    (await page.locator(SELECTORS.mainImage).first().getAttribute("src")) ||
+    previousImage
+  );
 }
 
 async function getGalleryImages(page) {
@@ -249,42 +309,44 @@ export async function extractProduct(page, url, index, total) {
 
   await page.goto(url, {
     waitUntil: "domcontentloaded",
-    timeout: 60000
+    timeout: 60000,
   });
 
   const titleHeading = page.locator(SELECTORS.titleHeading).first();
-  console.log(titleHeading)
-  console.log("11111111111111")
   await titleHeading.waitFor({ state: "visible", timeout: 10000 });
-  console.log("22222222222222")
 
-  const [fullText, brand, priceText, compareAtPriceText, descriptionHtml, mainImage] =
-    await Promise.all([
-      getTextContent(titleHeading),
-      getTextContent(page.locator(SELECTORS.titleBrand)),
-      getTextContent(page.locator(SELECTORS.sellingPrice)),
-      getTextContent(page.locator(SELECTORS.listPrice)),
-      getDescriptionHtml(page),
-      getMainImageSrc(page)
-    ]);
+  const [
+    fullText,
+    brand,
+    priceText,
+    descriptionHtml,
+    mainImage,
+  ] = await Promise.all([
+    getTextContent(titleHeading),
+    getTextContent(page.locator(SELECTORS.titleBrand)),
+    getTextContent(page.locator(SELECTORS.sellingPrice)),
+    getDescriptionHtml(page),
+    getMainImageSrc(page),
+  ]);
 
-    console.log("33333333333333333")
   let title = fullText;
   if (brand && fullText.includes(brand)) {
     title = fullText.replace(brand, "").trim();
   }
   title = title.replace(/^\s*-\s*/, "").trim();
-  console.log("44444444444444444")
   const finalTitle = brand ? `${brand}, ${title}` : title;
   const handle = buildHandle(brand ? `${brand} ${title}` : title);
-  const price = normalizePrice(priceText);
-  const compareAtPrice = normalizePrice(compareAtPriceText);
-  console.log("55555555555555555")
+  const productCompareAtMultiplier = getRandomCompareAtMultiplier();
+  const defaultPricingBase = buildPricingFields(priceText);
+  const defaultCompareAtPrice = buildSharedCompareAtPrice(
+    [defaultPricingBase.price],
+    productCompareAtMultiplier,
+  );
+  const defaultPricing = buildPricingFields(priceText, defaultCompareAtPrice);
   const rows = [];
   const standaloneSize = await getTextContent(
-    page.locator(SELECTORS.standaloneSize)
+    page.locator(SELECTORS.standaloneSize),
   );
-  console.log("66666666666666666")
   if (standaloneSize && isSizeValue(standaloneSize)) {
     rows.push(
       buildPrimaryRow({
@@ -292,40 +354,39 @@ export async function extractProduct(page, url, index, total) {
         finalTitle,
         descriptionHtml,
         brand,
-        price,
-        compareAtPrice,
+        ...defaultPricing,
         mainImage,
         url,
         option1Name: "Size",
-        option1Value: standaloneSize
-      })
+        option1Value: standaloneSize,
+      }),
     );
-    console.log("77777777777777777")
     const galleryImages = await getGalleryImages(page);
     for (let i = 1; i < galleryImages.length; i++) {
       rows.push({
         Handle: handle,
-        "Image Src": galleryImages[i]
+        "Image Src": galleryImages[i],
+        "Cost per item": defaultPricing.cost,
+        price: defaultPricing.price,
+        "Variant Compare At Price": defaultPricing.compareAtPrice,
       });
     }
-    console.log("88888888888888888")
     return rows;
   }
 
   let rawVariants = [];
-  console.log("99999999999999999")
   const hasVariantDialog = await openVariantDialog(page);
   if (hasVariantDialog) {
-    rawVariants = await page.$$eval(SELECTORS.variantButtons, buttons =>
-      buttons.map(button => ({
+    rawVariants = await page.$$eval(SELECTORS.variantButtons, (buttons) =>
+      buttons.map((button) => ({
         name: button.getAttribute("aria-label")?.trim(),
+        costText: button.querySelector("div:nth-child(1)")?.textContent ?? "",
         disabled:
           button.hasAttribute("disabled") ||
-          button.getAttribute("aria-disabled") === "true"
-      }))
+          button.getAttribute("aria-disabled") === "true",
+      })),
     );
   }
-  console.log("aaaaaaaaaaaaaaaaaaa")
   let sizeValue = null;
   const colorVariants = [];
 
@@ -338,8 +399,14 @@ export async function extractProduct(page, url, index, total) {
       colorVariants.push(variant);
     }
   }
-  console.log("bbbbbbbbbbbbbbbbbbbbbb")
   const hasSize = Boolean(sizeValue);
+  const sharedVariantCompareAtPrice = buildSharedCompareAtPrice(
+    colorVariants
+      .filter(({ disabled }) => !disabled)
+      .map(({ costText }) => buildPricingFields(costText || defaultPricing.cost).price)
+      .filter(Boolean),
+    productCompareAtMultiplier,
+  );
 
   if (!colorVariants.length && hasSize) {
     rows.push(
@@ -348,15 +415,13 @@ export async function extractProduct(page, url, index, total) {
         finalTitle,
         descriptionHtml,
         brand,
-        price,
-        compareAtPrice,
+        ...defaultPricing,
         mainImage,
         url,
         option1Name: "Size",
-        option1Value: sizeValue
-      })
+        option1Value: sizeValue,
+      }),
     );
-    console.log("ccccccccccccccccccccccc")
     return rows;
   }
 
@@ -367,22 +432,20 @@ export async function extractProduct(page, url, index, total) {
         finalTitle,
         descriptionHtml,
         brand,
-        price,
-        compareAtPrice,
+        ...defaultPricing,
         mainImage,
-        url
-      })
+        url,
+      }),
     );
-    console.log("dddddddddddddddddddddd")
     return rows;
   }
 
   let isFirstRow = true;
   let previousImage = mainImage;
   let firstVariantImage = "";
+  let firstVariantPricing = null;
   let shouldUseGallery = false;
-  console.log("eeeeeeeeeeeeeeeeeeeeeeee")
-  for (const { name, disabled } of colorVariants) {
+  for (const { name, disabled, costText } of colorVariants) {
     if (disabled) continue;
 
     const button = page
@@ -390,55 +453,54 @@ export async function extractProduct(page, url, index, total) {
       .filter({ hasText: name })
       .first();
 
+    const variantPricing = buildPricingFields(
+      costText || defaultPricing.cost,
+      sharedVariantCompareAtPrice || defaultPricing.compareAtPrice,
+    );
+
     await button.click();
     await waitForSelectedVariant(page, name);
-    console.log("fffffffffffffffffffffffff")
     const variantImage = await getVariantImage(page, previousImage);
     previousImage = variantImage;
-    console.log("ggggggggggggggggggggggggg")
     if (!firstVariantImage) {
       firstVariantImage = variantImage;
     } else if (variantImage === firstVariantImage) {
       shouldUseGallery = true;
     }
-    console.log("hhhhhhhhhhhhhhhhhhhhhhhh")
     if (isFirstRow) {
+      firstVariantPricing = variantPricing;
       rows.push(
         buildPrimaryRow({
           handle,
           finalTitle,
           descriptionHtml,
           brand,
-          price,
-          compareAtPrice,
+          ...variantPricing,
           mainImage,
           variantImage,
           url,
           option1Name: "Color",
           option1Value: name,
           option2Name: hasSize ? "Size" : "",
-          option2Value: hasSize ? sizeValue : ""
-        })
+          option2Value: hasSize ? sizeValue : "",
+        }),
       );
-      console.log("iiiiiiiiiiiiiiiiiiiiiiiiiiii")
       isFirstRow = false;
       continue;
     }
-    console.log("jjjjjjjjjjjjjjjjjjjjjjjjjjjj")
     rows.push(
       buildVariantRow({
         handle,
+        ...variantPricing,
         option1Value: name,
         option2Value: hasSize ? sizeValue : "",
-        variantImage
-      })
+        variantImage,
+      }),
     );
   }
-  console.log("kkkkkkkkkkkkkkkkkkkkkkkkkkkk")
-  console.log("llllllllllllllllllllllllllll")
   if (shouldUseGallery) {
     const galleryImages = await getGalleryImages(page);
-    console.log("mmmmmmmmmmmmmmmmmmmmmmmmmmmm")
+    const galleryPricing = firstVariantPricing ?? defaultPricing;
     if (galleryImages.length) {
       rows.length = 0;
       rows.push(
@@ -447,26 +509,27 @@ export async function extractProduct(page, url, index, total) {
           finalTitle,
           descriptionHtml,
           brand,
-          price,
-          compareAtPrice,
+          ...galleryPricing,
           mainImage: galleryImages[0] || mainImage,
           variantImage: galleryImages[0] || mainImage,
           url,
           option1Name: "Color",
           option1Value: colorVariants[0].name,
           option2Name: hasSize ? "Size" : "",
-          option2Value: hasSize ? sizeValue : ""
-        })
+          option2Value: hasSize ? sizeValue : "",
+        }),
       );
 
       for (let i = 1; i < galleryImages.length; i++) {
         rows.push({
           Handle: handle,
-          "Image Src": galleryImages[i]
+          "Image Src": galleryImages[i],
+          "Cost per item": galleryPricing.cost,
+          price: galleryPricing.price,
+          "Variant Compare At Price": galleryPricing.compareAtPrice,
         });
       }
     }
   }
-  console.log("nnnnnnnnnnnnnnnnnnnnnnnnnnnnnn")
   return rows;
 }
