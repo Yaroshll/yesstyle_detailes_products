@@ -1,18 +1,247 @@
+const SELECTORS = {
+  titleHeading: 'div[class*="productUpper-heading"] h1',
+  titleBrand: 'div[class*="productUpper-heading"] h1 a',
+  sellingPrice: 'span[class*="sellingPrice"]',
+  listPrice: 'span[class*="listPrice"]',
+  infoBox: 'div[class*="productInfoBox"]',
+  accordionContent: 'div[class*="accordionContent"]',
+  mainImage: 'div[class*="productImageCover"] img',
+  galleryButton: 'button:has-text("View Gallery")',
+  galleryImages: 'section[class*="productMedia"] [class*="img-content"] img',
+  standaloneSize:
+    'div[role="button"][aria-hidden="true"] span[class*="option-title"]',
+  openVariantButton:
+    'div[role="button"]:has(span[class*="option-title"]):not([aria-hidden="true"])',
+  variantDialog: "#product-options-dialog-content",
+  variantDialogCloseButton:
+    '[role="dialog"][aria-describedby="product-options-dialog-content"] button[class*="closeButton"]',
+  variantButtons: '#product-options-dialog-content button[aria-label]'
+};
+
 function isSizeValue(value) {
   if (!value) return false;
   return /\b\d+(\.\d+)?\s?(g|kg|ml|l|oz|pcs|pc|pack)\b/i.test(value);
 }
 
-async function extractGalleryImages(page) {
-  await page.waitForSelector(
-    'section.productMedia-module-scss-module__MBnCyq__img-content img',
-    { timeout: 10000 }
-  );
+function normalizeText(value) {
+  return value?.trim() ?? "";
+}
 
-  return await page.$$eval(
-    'section.productMedia-module-scss-module__MBnCyq__img-content img',
-    imgs => [...new Set(imgs.map(img => img.src).filter(Boolean))]
+function normalizePrice(value) {
+  return normalizeText(value).replace(/[^\d.]/g, "").replace(/\.$/, "");
+}
+
+function buildHandle(value) {
+  return value
+    .toLowerCase()
+    .replace(/,/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+function buildPrimaryRow({
+  handle,
+  finalTitle,
+  descriptionHtml,
+  brand,
+  price,
+  compareAtPrice,
+  mainImage,
+  variantImage = mainImage,
+  url,
+  option1Name = "",
+  option1Value = "",
+  option2Name = "",
+  option2Value = ""
+}) {
+  return {
+    Handle: handle,
+    Title: finalTitle,
+    "Body (HTML)": descriptionHtml,
+    Vendor: brand,
+    "Option1 Name": option1Name,
+    "Option1 Value": option1Value,
+    "Option2 Name": option2Name,
+    "Option2 Value": option2Value,
+    "Cost per item": price,
+    "Variant Compare At Price": compareAtPrice,
+    "Variant Fulfillment Service": "manual",
+    "Variant Inventory Policy": "deny",
+    "Variant Inventory Tracker": "shopify",
+    "Image Src": mainImage,
+    "Variant Image": variantImage,
+    "product.metafields.custom.original_product_url": url
+  };
+}
+
+function buildVariantRow({
+  handle,
+  option1Value = "",
+  option2Value = "",
+  variantImage = ""
+}) {
+  return {
+    Handle: handle,
+    "Option1 Value": option1Value,
+    "Option2 Value": option2Value,
+    "Variant Fulfillment Service": "manual",
+    "Variant Inventory Policy": "deny",
+    "Variant Inventory Tracker": "shopify",
+    "Variant Image": variantImage
+  };
+}
+
+async function getTextContent(locator) {
+  const firstMatch = locator.first();
+  const matchCount = await firstMatch.count().catch(() => 0);
+
+  if (!matchCount) {
+    return "";
+  }
+
+  return normalizeText(
+    await firstMatch.textContent({ timeout: 500 }).catch(() => "")
   );
+}
+
+async function getInnerHtml(locator) {
+  return (await locator.first().evaluate(el => el.innerHTML).catch(() => "")) || "";
+}
+
+async function getMainImageSrc(page) {
+  const image = page.locator(SELECTORS.mainImage).first();
+  await image.waitFor({ state: "attached", timeout: 10000 });
+  return (await image.getAttribute("src")) || "";
+}
+
+async function getDescriptionHtml(page) {
+  const accordion = page.locator(SELECTORS.accordionContent).first();
+
+  if (await accordion.count()) {
+    return getInnerHtml(accordion);
+  }
+
+  const infoBox = page.locator(SELECTORS.infoBox).first();
+  await infoBox.waitFor({ state: "attached", timeout: 10000 }).catch(() => {});
+  return getInnerHtml(infoBox);
+}
+
+async function extractGalleryImages(page) {
+  const galleryImages = page.locator(SELECTORS.galleryImages);
+  await galleryImages.first().waitFor({ state: "attached", timeout: 10000 });
+
+  return page.$$eval(SELECTORS.galleryImages, imgs =>
+    [...new Set(imgs.map(img => img.getAttribute("src") || img.src).filter(Boolean))]
+  );
+}
+
+async function openVariantDialog(page) {
+  const dialog = page.locator(SELECTORS.variantDialog);
+
+  if (await dialog.isVisible().catch(() => false)) {
+    return true;
+  }
+
+  const trigger = page.locator(SELECTORS.openVariantButton).first();
+  const triggerCount = await trigger.count().catch(() => 0);
+
+  if (!triggerCount) {
+    return false;
+  }
+
+  await trigger.waitFor({ state: "visible", timeout: 5000 });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await trigger.scrollIntoViewIfNeeded().catch(() => {});
+    await trigger
+      .click({
+        timeout: 2000,
+        force: attempt > 0
+      })
+      .catch(() => {});
+
+    await dialog.waitFor({ state: "visible", timeout: 1500 }).catch(() => {});
+
+    if (await dialog.isVisible().catch(() => false)) {
+      return true;
+    }
+  }
+
+  throw new Error("Variant dialog did not open after retries");
+}
+
+async function closeVariantDialog(page) {
+  const dialog = page.locator(SELECTORS.variantDialog);
+
+  if (!(await dialog.isVisible().catch(() => false))) {
+    return;
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await dialog.waitFor({ state: "hidden", timeout: 250 }).catch(() => {});
+
+  if (await dialog.isVisible().catch(() => false)) {
+    await page
+      .locator(SELECTORS.variantDialogCloseButton)
+      .first()
+      .click({ timeout: 1000 })
+      .catch(() => {});
+  }
+
+  await dialog.waitFor({ state: "hidden", timeout: 1000 }).catch(() => {});
+}
+
+async function waitForSelectedVariant(page, name) {
+  await page
+    .waitForFunction(
+      ({ selector, expectedText }) => {
+        const trigger = document.querySelector(selector);
+        return trigger?.textContent?.includes(expectedText) ?? false;
+      },
+      {
+        selector: SELECTORS.openVariantButton,
+        expectedText: name
+      },
+      { timeout: 5000 }
+    )
+    .catch(() => {});
+}
+
+async function getVariantImage(page, previousImage = "") {
+  if (previousImage) {
+    await page
+      .waitForFunction(
+        ({ selector, previousSrc }) => {
+          const image = document.querySelector(selector);
+          const currentSrc = image?.getAttribute("src");
+          return Boolean(currentSrc) && currentSrc !== previousSrc;
+        },
+        {
+          selector: SELECTORS.mainImage,
+          previousSrc: previousImage
+        },
+        { timeout: 2000 }
+      )
+      .catch(() => {});
+  }
+
+  return (await page.locator(SELECTORS.mainImage).first().getAttribute("src")) || previousImage;
+}
+
+async function getGalleryImages(page) {
+  const button = page.locator(SELECTORS.galleryButton).first();
+
+  if (!(await button.count())) {
+    return [];
+  }
+
+  await closeVariantDialog(page);
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.click();
+
+  return extractGalleryImages(page).catch(() => []);
 }
 
 export async function extractProduct(page, url, index, total) {
@@ -23,331 +252,212 @@ export async function extractProduct(page, url, index, total) {
     timeout: 60000
   });
 
-  // ================= TITLE + BRAND =================
-  await page.waitForSelector('div[class*="productUpper-heading"] h1');
+  const titleHeading = page.locator(SELECTORS.titleHeading).first();
+  console.log(titleHeading)
+  console.log("11111111111111")
+  await titleHeading.waitFor({ state: "visible", timeout: 10000 });
+  console.log("22222222222222")
 
-  const fullText = await page.textContent(
-    'div[class*="productUpper-heading"] h1'
-  );
+  const [fullText, brand, priceText, compareAtPriceText, descriptionHtml, mainImage] =
+    await Promise.all([
+      getTextContent(titleHeading),
+      getTextContent(page.locator(SELECTORS.titleBrand)),
+      getTextContent(page.locator(SELECTORS.sellingPrice)),
+      getTextContent(page.locator(SELECTORS.listPrice)),
+      getDescriptionHtml(page),
+      getMainImageSrc(page)
+    ]);
 
-  const brand = await page.textContent(
-    'div[class*="productUpper-heading"] h1 a'
-  );
-
-  let title = fullText.replace(brand, "").trim();
+    console.log("33333333333333333")
+  let title = fullText;
+  if (brand && fullText.includes(brand)) {
+    title = fullText.replace(brand, "").trim();
+  }
   title = title.replace(/^\s*-\s*/, "").trim();
-
-  const finalTitle = `${brand}, ${title}`;
-
-  const handle = `${brand} ${title}`
-    .toLowerCase()
-    .replace(/,/g, "")
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9\s]/g, "")
-    .trim()
-    .replace(/\s+/g, "-");
-
-  // ================= PRICE =================
-  let price = "";
-  let compareAtPrice = "";
-
-  try {
-    price = (await page.textContent(
-      'span.productDetailPage-module-scss-module__dKBM_W__sellingPrice'
-    ))
-      .replace(/[^\d.]/g, "")
-      .replace(/\.$/, "");
-  } catch {}
-
-  try {
-    compareAtPrice = (await page.textContent(
-      'span.productDetailPage-module-scss-module__dKBM_W__listPrice'
-    ))
-      .replace(/[^\d.]/g, "")
-      .replace(/\.$/, "");
-  } catch {}
-
-  // ================= DESCRIPTION =================
-  let descriptionHtml = "";
-
-  try {
-    const infoBox = page.locator('div[class*="productInfoBox"]');
-    await infoBox.first().scrollIntoViewIfNeeded();
-    await page.waitForTimeout(400);
-
-    const accordion = page.locator('div[class*="accordionContent"]');
-    descriptionHtml =
-      (await accordion.count()) > 0
-        ? await accordion.first().evaluate(el => el.innerHTML)
-        : await infoBox.first().evaluate(el => el.innerHTML);
-  } catch {}
-
-  // ================= MAIN IMAGE =================
-  await page.waitForSelector(
-    'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img'
-  );
-
-  const mainImage = await page.$eval(
-    'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img',
-    img => img.src
-  );
-
+  console.log("44444444444444444")
+  const finalTitle = brand ? `${brand}, ${title}` : title;
+  const handle = buildHandle(brand ? `${brand} ${title}` : title);
+  const price = normalizePrice(priceText);
+  const compareAtPrice = normalizePrice(compareAtPriceText);
+  console.log("55555555555555555")
   const rows = [];
-
-  // ============================================================
-  // 🟢 CASE 1: STANDALONE SIZE (aria-hidden=true, no dialog)
-  // ============================================================
-  const standaloneSize = await page
-    .locator(
-      'div[role="button"][aria-hidden="true"] span.buyOptions-module-scss-module__Zum4na__option-title'
-    )
-    .first()
-    .textContent()
-    .catch(() => null);
-
+  const standaloneSize = await getTextContent(
+    page.locator(SELECTORS.standaloneSize)
+  );
+  console.log("66666666666666666")
   if (standaloneSize && isSizeValue(standaloneSize)) {
-    rows.push({
-      Handle: handle,
-      Title: finalTitle,
-      "Body (HTML)": descriptionHtml,
-      Vendor: brand,
-
-      "Option1 Name": "Size",
-      "Option1 Value": standaloneSize.trim(),
-
-      "Cost per item": price,
-      "Variant Compare At Price": compareAtPrice,
-
-      "Variant Fulfillment Service": "manual",
-      "Variant Inventory Policy": "deny",
-      "Variant Inventory Tracker": "shopify",
-
-      "Image Src": mainImage,
-      "Variant Image": mainImage,
-
-      "product.metafields.custom.original_product_url": url
-    });
-
-    const viewGalleryBtn = page.locator('button:has-text("View Gallery")');
-    if (await viewGalleryBtn.count()) {
-      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-      await page.waitForTimeout(300);
-      await viewGalleryBtn.first().scrollIntoViewIfNeeded();
-      await page.waitForTimeout(400);
-      await viewGalleryBtn.first().click();
-      await page.waitForTimeout(800);
-
-      const galleryImages = await extractGalleryImages(page);
-
-     
-      for (let i = 1; i < galleryImages.length; i++) {
-        rows.push({
-          Handle: handle,
-          "Image Src": galleryImages[i]
-        });
-      }
+    rows.push(
+      buildPrimaryRow({
+        handle,
+        finalTitle,
+        descriptionHtml,
+        brand,
+        price,
+        compareAtPrice,
+        mainImage,
+        url,
+        option1Name: "Size",
+        option1Value: standaloneSize
+      })
+    );
+    console.log("77777777777777777")
+    const galleryImages = await getGalleryImages(page);
+    for (let i = 1; i < galleryImages.length; i++) {
+      rows.push({
+        Handle: handle,
+        "Image Src": galleryImages[i]
+      });
     }
-
+    console.log("88888888888888888")
     return rows;
   }
-
-  // ============================================================
-  // 🔵 NORMAL VARIANTS FLOW
-  // ============================================================
-  const OPEN_VARIANT_BTN =
-    'div[role="button"]:has(span.buyOptions-module-scss-module__Zum4na__option-title):not([aria-hidden="true"])';
-
-  const VARIANT_DIALOG = '#product-options-dialog-content';
-  const VARIANT_BUTTONS =
-    '#product-options-dialog-content button[aria-label]';
 
   let rawVariants = [];
-
-  try {
-    await page.click(OPEN_VARIANT_BTN);
-    await page.waitForSelector(VARIANT_DIALOG);
-
-    rawVariants = await page.$$eval(VARIANT_BUTTONS, btns =>
-      btns.map(b => ({
-        name: b.getAttribute("aria-label")?.trim(),
+  console.log("99999999999999999")
+  const hasVariantDialog = await openVariantDialog(page);
+  if (hasVariantDialog) {
+    rawVariants = await page.$$eval(SELECTORS.variantButtons, buttons =>
+      buttons.map(button => ({
+        name: button.getAttribute("aria-label")?.trim(),
         disabled:
-          b.hasAttribute("disabled") ||
-          b.getAttribute("aria-disabled") === "true"
+          button.hasAttribute("disabled") ||
+          button.getAttribute("aria-disabled") === "true"
       }))
     );
-  } catch {
-    rawVariants = [];
   }
-
-  // ================= SPLIT COLOR / SIZE =================
+  console.log("aaaaaaaaaaaaaaaaaaa")
   let sizeValue = null;
-  let colorVariants = [];
+  const colorVariants = [];
 
-  for (const v of rawVariants) {
-    if (isSizeValue(v.name)) {
-      sizeValue = v.name;
+  for (const variant of rawVariants) {
+    if (!variant.name) continue;
+
+    if (isSizeValue(variant.name)) {
+      sizeValue = variant.name;
     } else {
-      colorVariants.push(v);
+      colorVariants.push(variant);
     }
   }
+  console.log("bbbbbbbbbbbbbbbbbbbbbb")
+  const hasSize = Boolean(sizeValue);
 
-  const hasSize = !!sizeValue;
-
-  // ============================================================
-  // 🟡 CASE 2: SIZE ONLY (dialog exists but one size)
-  // ============================================================
   if (!colorVariants.length && hasSize) {
-    rows.push({
-      Handle: handle,
-      Title: finalTitle,
-      "Body (HTML)": descriptionHtml,
-      Vendor: brand,
-
-      "Option1 Name": "Size",
-      "Option1 Value": sizeValue,
-
-      "Cost per item": price,
-      "Variant Compare At Price": compareAtPrice,
-
-      "Variant Fulfillment Service": "manual",
-      "Variant Inventory Policy": "deny",
-      "Variant Inventory Tracker": "shopify",
-
-      "Image Src": mainImage,
-      "Variant Image": mainImage,
-
-      "product.metafields.custom.original_product_url": url
-    });
-
+    rows.push(
+      buildPrimaryRow({
+        handle,
+        finalTitle,
+        descriptionHtml,
+        brand,
+        price,
+        compareAtPrice,
+        mainImage,
+        url,
+        option1Name: "Size",
+        option1Value: sizeValue
+      })
+    );
+    console.log("ccccccccccccccccccccccc")
     return rows;
   }
 
-  // ============================================================
-  // 🟣 COLOR (WITH OR WITHOUT SIZE)
-  // ============================================================
-  let isFirstRow = true;
-  let firstVariantImage = null;
-  let shouldUseGallery = false;
+  if (!colorVariants.length) {
+    rows.push(
+      buildPrimaryRow({
+        handle,
+        finalTitle,
+        descriptionHtml,
+        brand,
+        price,
+        compareAtPrice,
+        mainImage,
+        url
+      })
+    );
+    console.log("dddddddddddddddddddddd")
+    return rows;
+  }
 
-  for (let i = 0; i < colorVariants.length; i++) {
-    const { name, disabled } = colorVariants[i];
+  let isFirstRow = true;
+  let previousImage = mainImage;
+  let firstVariantImage = "";
+  let shouldUseGallery = false;
+  console.log("eeeeeeeeeeeeeeeeeeeeeeee")
+  for (const { name, disabled } of colorVariants) {
     if (disabled) continue;
 
-    if (i !== 0) {
-      await page.click(OPEN_VARIANT_BTN);
-      await page.waitForSelector(VARIANT_DIALOG);
-    }
-
-    const btn = page
-      .locator(VARIANT_BUTTONS)
+    const button = page
+      .locator(SELECTORS.variantButtons)
       .filter({ hasText: name })
       .first();
 
-    await btn.click();
-    await page.waitForTimeout(500);
-
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(400);
-
-    const variantImage = await page.$eval(
-      'div.productDetailPage-module-scss-module__dKBM_W__productImageCover img',
-      img => img.src
-    );
-
+    await button.click();
+    await waitForSelectedVariant(page, name);
+    console.log("fffffffffffffffffffffffff")
+    const variantImage = await getVariantImage(page, previousImage);
+    previousImage = variantImage;
+    console.log("ggggggggggggggggggggggggg")
     if (!firstVariantImage) {
       firstVariantImage = variantImage;
     } else if (variantImage === firstVariantImage) {
       shouldUseGallery = true;
     }
-
+    console.log("hhhhhhhhhhhhhhhhhhhhhhhh")
     if (isFirstRow) {
-      rows.push({
-        Handle: handle,
-        Title: finalTitle,
-        "Body (HTML)": descriptionHtml,
-        Vendor: brand,
-
-        "Option1 Name": "Color",
-        "Option1 Value": name,
-
-        "Option2 Name": hasSize ? "Size" : "",
-        "Option2 Value": hasSize ? sizeValue : "",
-
-        "Cost per item": price,
-        "Variant Compare At Price": compareAtPrice,
-
-        "Variant Fulfillment Service": "manual",
-        "Variant Inventory Policy": "deny",
-        "Variant Inventory Tracker": "shopify",
-
-        "Image Src": mainImage,
-        "Variant Image": variantImage,
-
-        "product.metafields.custom.original_product_url": url
-      });
-
+      rows.push(
+        buildPrimaryRow({
+          handle,
+          finalTitle,
+          descriptionHtml,
+          brand,
+          price,
+          compareAtPrice,
+          mainImage,
+          variantImage,
+          url,
+          option1Name: "Color",
+          option1Value: name,
+          option2Name: hasSize ? "Size" : "",
+          option2Value: hasSize ? sizeValue : ""
+        })
+      );
+      console.log("iiiiiiiiiiiiiiiiiiiiiiiiiiii")
       isFirstRow = false;
-    } else {
-      rows.push({
-        Handle: handle,
-        "Option1 Value": name,
-        "Option2 Value": hasSize ? sizeValue : "",
-
-        "Variant Fulfillment Service": "manual",
-        "Variant Inventory Policy": "deny",
-        "Variant Inventory Tracker": "shopify",
-
-        "Variant Image": variantImage
-      });
+      continue;
     }
+    console.log("jjjjjjjjjjjjjjjjjjjjjjjjjjjj")
+    rows.push(
+      buildVariantRow({
+        handle,
+        option1Value: name,
+        option2Value: hasSize ? sizeValue : "",
+        variantImage
+      })
+    );
   }
-
-  // ============================================================
-  // 🔴 VIEW GALLERY FALLBACK (IMAGES NOT CHANGING)
-  // ============================================================
+  console.log("kkkkkkkkkkkkkkkkkkkkkkkkkkkk")
+  console.log("llllllllllllllllllllllllllll")
   if (shouldUseGallery) {
-    const viewGalleryBtn = page.locator('button:has-text("View Gallery")');
-
-    if (await viewGalleryBtn.count()) {
-      // scroll عام
-      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-      await page.waitForTimeout(300);
-
-      // scroll مباشر للزر
-      await viewGalleryBtn.first().scrollIntoViewIfNeeded();
-      await page.waitForTimeout(400);
-
-      // click
-      await viewGalleryBtn.first().click();
-      await page.waitForTimeout(800);
-
-      const galleryImages = await extractGalleryImages(page);
-
+    const galleryImages = await getGalleryImages(page);
+    console.log("mmmmmmmmmmmmmmmmmmmmmmmmmmmm")
+    if (galleryImages.length) {
       rows.length = 0;
-
-      rows.push({
-        Handle: handle,
-        Title: finalTitle,
-        "Body (HTML)": descriptionHtml,
-        Vendor: brand,
-
-        "Option1 Name": "Color",
-        "Option1 Value": colorVariants[0].name,
-
-        "Option2 Name": hasSize ? "Size" : "",
-        "Option2 Value": hasSize ? sizeValue : "",
-
-        "Cost per item": price,
-        "Variant Compare At Price": compareAtPrice,
-
-        "Variant Fulfillment Service": "manual",
-        "Variant Inventory Policy": "deny",
-        "Variant Inventory Tracker": "shopify",
-
-        "Image Src": galleryImages[0] || mainImage,
-
-        "product.metafields.custom.original_product_url": url
-      });
+      rows.push(
+        buildPrimaryRow({
+          handle,
+          finalTitle,
+          descriptionHtml,
+          brand,
+          price,
+          compareAtPrice,
+          mainImage: galleryImages[0] || mainImage,
+          variantImage: galleryImages[0] || mainImage,
+          url,
+          option1Name: "Color",
+          option1Value: colorVariants[0].name,
+          option2Name: hasSize ? "Size" : "",
+          option2Value: hasSize ? sizeValue : ""
+        })
+      );
 
       for (let i = 1; i < galleryImages.length; i++) {
         rows.push({
@@ -357,6 +467,6 @@ export async function extractProduct(page, url, index, total) {
       }
     }
   }
-
+  console.log("nnnnnnnnnnnnnnnnnnnnnnnnnnnnnn")
   return rows;
 }

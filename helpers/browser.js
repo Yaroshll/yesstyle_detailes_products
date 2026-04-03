@@ -1,26 +1,54 @@
 import { chromium } from "playwright";
 
+const BLOCKED_RESOURCE_TYPES = new Set(["font", "image", "media"]);
+const BLOCKED_URL_PATTERNS = [
+  "doubleclick",
+  "facebook.net",
+  "google-analytics",
+  "googletagmanager",
+  "hotjar",
+  "clarity.ms"
+];
+
 // Browser configuration constants
 const BROWSER_CONFIG = {
   LAUNCH_OPTIONS: {
     headless: false,
     timeout: 12000,
-    channel: 'chrome', 
+    channel: "chrome",
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-    ],
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu"
+    ]
   },
   CONTEXT_OPTIONS: {
     viewport: { width: 1280, height: 720 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  },
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    serviceWorkers: "block"
+  }
 };
+
+async function enableResourceBlocking(context) {
+  await context.route("**/*", route => {
+    const request = route.request();
+    const url = request.url();
+
+    if (
+      BLOCKED_RESOURCE_TYPES.has(request.resourceType()) ||
+      BLOCKED_URL_PATTERNS.some(pattern => url.includes(pattern))
+    ) {
+      return route.abort();
+    }
+
+    return route.continue();
+  });
+}
 
 /**
  * Launches a Chromium browser instance with optimized settings
@@ -35,19 +63,18 @@ const BROWSER_CONFIG = {
 export async function launchBrowser() {
   try {
     console.log("🚀 Launching Chromium browser...");
-    
+
     const browser = await chromium.launch(BROWSER_CONFIG.LAUNCH_OPTIONS);
-    
+
     console.log("✅ Browser launched successfully");
     return browser;
   } catch (error) {
     console.error("❌ Failed to launch browser:", error.message);
-    
-    // ✅ محاولة بديلة إذا فشل استخدام Chrome
+
     console.log("🔄 Trying fallback method without channel...");
     try {
       const fallbackOptions = { ...BROWSER_CONFIG.LAUNCH_OPTIONS };
-      delete fallbackOptions.channel; // إزالة channel من الخيارات
+      delete fallbackOptions.channel;
       const browser = await chromium.launch(fallbackOptions);
       console.log("✅ Browser launched with fallback method");
       return browser;
@@ -71,9 +98,10 @@ export async function launchBrowser() {
 export async function createBrowserContext(browser) {
   try {
     console.log("🌐 Creating browser context...");
-    
+
     const context = await browser.newContext(BROWSER_CONFIG.CONTEXT_OPTIONS);
-    
+    await enableResourceBlocking(context);
+
     console.log("✅ Browser context created successfully");
     return context;
   } catch (error) {
