@@ -103,7 +103,7 @@ function buildPrimaryRow({
     Handle: handle,
     Title: finalTitle,
     "Body (HTML)": descriptionHtml,
-    Vendor: brand,
+    Vendor: "yesstyle",
     "Option1 Name": option1Name,
     "Option1 Value": option1Value,
     "Option2 Name": option2Name,
@@ -117,6 +117,7 @@ function buildPrimaryRow({
     "Image Src": mainImage,
     "Variant Image": variantImage,
     "product.metafields.custom.original_product_url": url,
+    "product.metafields.custom.brand": brand,
   };
 }
 
